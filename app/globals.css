@@ -1037,6 +1037,15 @@ input {
 .field input::placeholder {
   color: var(--text-muted);
 }
+/* native <select> dropdown popup is OS-rendered (white bg by default) —
+   force dark bg + light text so options are legible */
+.field select option {
+  background: #0b0e17;
+  color: #f4f6fb;
+}
+.field select {
+  color-scheme: dark;
+}
 .field input:focus,
 .field select:focus {
   border-color: rgba(110, 231, 249, 0.5);
