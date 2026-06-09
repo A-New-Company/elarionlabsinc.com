@@ -8,61 +8,59 @@ by email, computes a waitlist position, and appends a row.
 ## 1. Create the sheet
 1. Go to <https://sheets.google.com> → **Blank spreadsheet**.
 2. Name it e.g. **Elarion Waitlist**.
-3. In **row 1**, add these headers (column order matters):
-
-   | A    | B     | C    | D          | E        |
-   |------|-------|------|------------|----------|
-   | Name | Email | Goal | Created At | Position |
+3. No need to add headers manually — the script creates a `Subscribers` tab
+   with headers `createdAt | name | email | goal` on first submit.
 
 ## 2. Add the Apps Script
 1. In the sheet: **Extensions → Apps Script**.
 2. Delete any boilerplate, paste the code below.
-3. Change `SECRET` to a long random string (you'll reuse it in Vercel).
+3. (Optional) set `SECRET` to a long random string for extra protection;
+   leave `''` to disable the check.
 4. Click **Save** (💾).
 
+The Next.js side (`lib/store.ts → addViaSheets`) expects a JSON reply of
+`{ ok: true }`, `{ ok: true, duplicate: true }`, or `{ ok: false, error }`.
+A `position` number is optional — include it to show the "#1248" rank on the
+success card.
+
 ```javascript
-// ⚠️ Change this to a long random string. Must match SHEETS_WEBHOOK_SECRET in Vercel.
-const SECRET = 'CHANGE_ME_TO_A_LONG_RANDOM_STRING';
+const SHEET_NAME = 'Subscribers';
 const SEED = 1247; // position offset, matches lib/store.ts
+// Optional: set to a long random string to require a matching
+// SHEETS_WEBHOOK_SECRET in Vercel. Leave '' to disable the check.
+const SECRET = '';
 
 function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(5000);
   try {
-    const body = JSON.parse(e.postData.contents);
-    if (body.secret !== SECRET) {
-      return json({ success: false, error: 'unauthorized' });
+    const data = JSON.parse(e.postData.contents);
+    if (SECRET && data.secret !== SECRET) return json({ ok: false, error: 'unauthorized' });
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) { sheet = ss.insertSheet(SHEET_NAME); sheet.appendRow(['createdAt', 'name', 'email', 'goal']); }
+
+    const email = String(data.email || '').toLowerCase().trim();
+    const lastRow = sheet.getLastRow();
+    if (email && lastRow >= 2) {
+      const existing = sheet.getRange(2, 3, lastRow - 1, 1).getValues().flat();
+      const idx = existing.findIndex(x => String(x).toLowerCase().trim() === email);
+      if (idx !== -1) return json({ ok: true, duplicate: true, position: SEED + idx + 1 });
     }
 
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-    const email = String(body.email || '').trim().toLowerCase();
-    const name = String(body.name || '').trim();
-    const goal = String(body.goal || '');
-    const createdAt = body.createdAt || new Date().toISOString();
-
-    if (!email || !name) {
-      return json({ success: false, error: 'invalid' });
-    }
-
-    // Dedupe by email (column B). Row 1 is the header.
-    const values = sheet.getDataRange().getValues();
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][1]).trim().toLowerCase() === email) {
-        return json({ success: false, status: 'exists', position: SEED + i });
-      }
-    }
-
-    const count = sheet.getLastRow(); // includes header row
-    const position = SEED + count;    // header=1 → first signup = SEED+1
-    sheet.appendRow([name, email, goal, createdAt, position]);
-    return json({ success: true, status: 'created', position: position });
+    sheet.appendRow([data.createdAt || new Date().toISOString(), data.name || '', email, data.goal || '']);
+    const position = SEED + (sheet.getLastRow() - 1); // minus header row
+    return json({ ok: true, position: position });
   } catch (err) {
-    return json({ success: false, error: String(err) });
+    return json({ ok: false, error: String(err) });
+  } finally {
+    lock.releaseLock();
   }
 }
 
-function json(obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+function json(o) {
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
 }
 ```
 
@@ -82,10 +80,14 @@ function json(obj) {
 ## 4. Add env vars in Vercel
 Project → **Settings → Environment Variables** → add (Production + Preview):
 
-| Key | Value |
-|-----|-------|
-| `SHEETS_WEBHOOK_URL` | the `.../exec` URL from step 3 |
-| `SHEETS_WEBHOOK_SECRET` | the same random string you set as `SECRET` |
+| Key | Value | Required? |
+|-----|-------|-----------|
+| `SHEETS_WEBHOOK_URL` | the `.../exec` URL from step 3 | **Yes** |
+| `SHEETS_WEBHOOK_SECRET` | same string you set as `SECRET` in the script | Only if `SECRET` is non-empty |
+
+> Setting `SHEETS_WEBHOOK_URL` is what switches the app to the Google Sheet
+> backend. If you left `SECRET = ''` in the script, you can skip
+> `SHEETS_WEBHOOK_SECRET` (the value sent is simply ignored).
 
 Then **redeploy** (Deployments → ⋯ → Redeploy) so the new vars take effect.
 

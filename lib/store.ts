@@ -50,20 +50,23 @@ async function addViaSheets(input: AddInput): Promise<AddResult> {
   });
 
   const text = await res.text();
-  let data: { status?: string; position?: number; error?: string };
+  let data: {
+    ok?: boolean;
+    duplicate?: boolean;
+    position?: number;
+    error?: string;
+  };
   try {
     data = JSON.parse(text);
   } catch {
     throw new Error("sheets_bad_response");
   }
 
-  if (data.status === "exists") {
-    return { status: "exists", position: Number(data.position) };
-  }
-  if (data.status === "created") {
-    return { status: "created", position: Number(data.position) };
-  }
-  throw new Error(data.error || "sheets_error");
+  if (!data.ok) throw new Error(data.error || "sheets_error");
+  // position is optional — if the script doesn't return it, the success card
+  // simply omits the number (Waitlist.tsx only shows it when truthy).
+  const position = Number(data.position) || 0;
+  return { status: data.duplicate ? "exists" : "created", position };
 }
 
 // ── Backend 2: Upstash Redis ────────────────────────────────────────────
